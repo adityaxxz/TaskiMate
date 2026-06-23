@@ -37,13 +37,8 @@ export interface Activity {
 
 // API REQUEST/RESPONSE TYPES
 
-export interface OTPRequest {
-  email: string;
-}
-
-export interface OTPVerify {
-  email: string;
-  code: string;
+export interface GoogleLoginRequest {
+  id_token: string;
 }
 
 export interface ProjectCreate {

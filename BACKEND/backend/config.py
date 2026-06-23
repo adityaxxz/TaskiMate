@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     JWT_ALG: str = "HS256"
     JWT_TTL_SECONDS: int = 60 * 60 * 24 * 7
 
+    GOOGLE_CLIENT_ID: str = os.getenv("GOOGLE_CLIENT_ID") or ""
+
     # Mail configuration (Resend SMTP)
     MAIL_USERNAME: str = os.getenv("MAIL_USERNAME") or "resend"
     MAIL_PASSWORD: SecretStr = SecretStr(os.getenv("MAIL_PASSWORD") or "")

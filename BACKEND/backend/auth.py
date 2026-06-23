@@ -1,52 +1,54 @@
-from fastapi import APIRouter, Depends, HTTPException, Security, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, Security
 from fastapi.security import APIKeyHeader
 import time
-import secrets
 import jwt
+import httpx
 from .db import get_database, get_next_sequence, utc_now
 from .config import Config
-from .schemas import OTPRequest, OTPVerify
-from .mail import send_otp_email
+from .schemas import GoogleLoginRequest
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
-otp_store = {}
 
+@router.post("/google-login")
+def google_login(data: GoogleLoginRequest, db = Depends(get_database)):
+    try:
+        response = httpx.get(
+            "https://oauth2.googleapis.com/tokeninfo",
+            params={"id_token": data.id_token},
+            timeout=10.0
+        )
+        if response.status_code != 200:
+            raise HTTPException(status_code=400, detail="Invalid Google token")
+        payload = response.json()
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise
+        raise HTTPException(status_code=400, detail=f"Failed to verify Google token: {str(e)}")
 
-@router.post("/request-otp")
-async def request_otp(data: OTPRequest, bg_tasks: BackgroundTasks):
-    code = str(secrets.randbelow(900000) + 100000)
-    otp_store[data.email] = {
-        'code': code, 
-        'expires_at': time.time() + 300  # 5 minutes
-    }
-    
-    bg_tasks.add_task(send_otp_email, data.email, code)
-    return {"message": "Login thru OTP, sent to email"}
+    # Check audience matches our client ID
+    if payload.get("aud") != Config.GOOGLE_CLIENT_ID:
+        raise HTTPException(status_code=400, detail="Invalid token audience")
 
+    # Get email and check
+    email = payload.get("email")
+    if not email:
+        raise HTTPException(status_code=400, detail="Email not found in token")
 
-@router.post("/verify-otp")
-def verify_otp(data: OTPVerify, db = Depends(get_database)):
-    email = data.email
-    stored_otp = otp_store.get(email)
-    
-    if not stored_otp or stored_otp['expires_at'] < time.time() or stored_otp['code'] != data.code:
-        raise HTTPException(status_code=400, detail="Invalid or expired OTP")
-    
-    del otp_store[data.email]
-        
-    user = db["users"].find_one({"email": data.email})
+    # Find or create user
+    user = db["users"].find_one({"email": email})
     if not user:
         new_id = get_next_sequence(db, "users")
-        db["users"].insert_one({"id": new_id, "email": data.email, "created_at": utc_now()})
+        db["users"].insert_one({"id": new_id, "email": email, "created_at": utc_now()})
         user = db["users"].find_one({"id": new_id})
 
-    payload = {
+    # Generate JWT
+    token_payload = {
         "sub": str(user["id"]), 
         "iat": int(time.time()), 
         "exp": int(time.time()) + Config.JWT_TTL_SECONDS
     }
-    token = jwt.encode(payload, Config.JWT_SECRET, algorithm=Config.JWT_ALG)
+    token = jwt.encode(token_payload, Config.JWT_SECRET, algorithm=Config.JWT_ALG)
 
     return {"token": token, "user_id": user["id"]}
 

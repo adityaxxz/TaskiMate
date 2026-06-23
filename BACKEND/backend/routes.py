@@ -1,9 +1,18 @@
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.encoders import jsonable_encoder
+from typing import List
 from .auth import get_current_user
-from .db import get_database, get_next_sequence, utc_now
+from .db import get_database, get_next_sequence, utc_now, execute_transactional
 from .config import Config
-from .schemas import ProjectCreate, TicketCreate, TicketUpdate, SuperToggleRequest
+from .schemas import (
+    ProjectCreate,
+    TicketCreate,
+    TicketUpdate,
+    SuperToggleRequest,
+    ProjectSchema,
+    TicketSchema,
+    ProjectWithTicketsSchema,
+)
 from fastapi.responses import JSONResponse
 from .notifications import notify_activity as send_notification
 from .ws import log_user_visit
@@ -15,7 +24,7 @@ def notify_activity(db, project_id: int, message: str, actor_email: str, ticket_
 router = APIRouter(prefix="/api", tags=["api"])
 
 
-@router.get("/projects")
+@router.get("/projects", response_model=List[ProjectSchema])
 def get_projects(db = Depends(get_database)):
     projects = list(db["projects"].find({}, {"_id": 0}))
     return projects
@@ -56,7 +65,7 @@ def create_project(data: ProjectCreate, user = Depends(get_current_user), db = D
         raise HTTPException(status_code=500, detail=f"Error creating project: {str(e)}")
 
 
-@router.get("/projects/{project_id}")
+@router.get("/projects/{project_id}", response_model=ProjectWithTicketsSchema)
 def get_project(project_id: int, db = Depends(get_database)):
 
     project = db["projects"].find_one({"id": project_id}, {"_id": 0})
@@ -81,34 +90,38 @@ def create_ticket(data: TicketCreate, user = Depends(get_current_user), db = Dep
             raise HTTPException(status_code=404, detail="Project not found")
         
         user_email = user['email']
-        new_id = get_next_sequence(db, "tickets")
-        ticket = {
-            "id": new_id,
-            "project_id": data.project_id,
-            "description": data.description,
-            "status": "todo",
-            "creator_id": int(user["id"]),
-            "creator_email": user["email"],  
-            "updated_by_id": int(user["id"]),
-            "updated_by_email": user_email,  
-            "created_at": utc_now(),
-            "updated_at": utc_now(),
-        }
-        db["tickets"].insert_one(ticket.copy())
         
-        
-        activity = {
-            "project_id": data.project_id,
-            "ticket_id": new_id,
-            "message": user_email + " raised a ticket",
-            "actor_email": user_email,
-            "created_at": utc_now(),
-        }
-        db["activities"].insert_one(activity.copy())
+        def do_create_ticket(session):
+            new_id = get_next_sequence(db, "tickets", session=session)
+            t = {
+                "id": new_id,
+                "project_id": data.project_id,
+                "description": data.description,
+                "status": "todo",
+                "creator_id": int(user["id"]),
+                "creator_email": user["email"],  
+                "updated_by_id": int(user["id"]),
+                "updated_by_email": user_email,  
+                "created_at": utc_now(),
+                "updated_at": utc_now(),
+            }
+            db["tickets"].insert_one(t.copy(), session=session)
+            
+            act = {
+                "project_id": data.project_id,
+                "ticket_id": new_id,
+                "message": user_email + " raised a ticket",
+                "actor_email": user_email,
+                "created_at": utc_now(),
+            }
+            db["activities"].insert_one(act.copy(), session=session)
+            return t, act
+            
+        ticket, activity = execute_transactional(db, do_create_ticket)
         
         log_user_visit(int(user["id"]), str(data.project_id))
         
-        notify_activity(db, project_id=int(data.project_id), message=activity["message"], actor_email=user["email"], ticket_id=int(new_id))
+        notify_activity(db, project_id=int(data.project_id), message=activity["message"], actor_email=user["email"], ticket_id=int(ticket["id"]))
 
         return JSONResponse(
             status_code=201,
@@ -131,7 +144,6 @@ def update_ticket(ticket_id: int, data: TicketUpdate, user = Depends(get_current
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket not found")
     
-    
     update_fields = {}
     if data.description is not None:
         update_fields["description"] = data.description
@@ -141,36 +153,42 @@ def update_ticket(ticket_id: int, data: TicketUpdate, user = Depends(get_current
     id = ticket['id']
     updated_by = user['email']
 
-    valid_status = ["todo", "deployed", "done", "inprogress","proposed"]
+    # Type safety/valid values are verified by Pydantic's TicketStatus
+    status_changed = (new_status is not None and new_status != old_status)
 
-    if data.status is not None:
-        if data.status not in valid_status:
-            raise HTTPException(status_code=400, detail="Invalid status")
-        update_fields["status"] = data.status
+    if new_status is not None:
+        update_fields["status"] = new_status
     
     update_fields["updated_by_id"] = int(user["id"])
     update_fields["updated_by_email"] = user["email"]  
-    db["tickets"].update_one(
-        {"id": ticket_id},
-        {"$set": update_fields, "$currentDate": {"updated_at": True}},
-    )
     
-    
-    activity = {
-        "project_id": int(ticket["project_id"]),
-        "ticket_id": ticket_id,
-        "message": updated_by + " moved Ticket:" + str(id) + " from " + old_status + " to " + new_status,
-        "actor_email": user["email"],
-        "created_at": utc_now(),
-    }
-    db["activities"].insert_one(activity.copy())
-
-    
-    log_user_visit(int(user["id"]), str(ticket["project_id"]))
-
-    
-    notify_activity(db, project_id=int(ticket["project_id"]), message=activity["message"], actor_email=user["email"], ticket_id=int(ticket_id))
-
+    if status_changed:
+        activity = {
+            "project_id": int(ticket["project_id"]),
+            "ticket_id": ticket_id,
+            "message": f"{updated_by} moved Ticket:{id} from {old_status} to {new_status}",
+            "actor_email": user["email"],
+            "created_at": utc_now(),
+        }
+        
+        def do_update_ticket(session):
+            db["tickets"].update_one(
+                {"id": ticket_id},
+                {"$set": update_fields, "$currentDate": {"updated_at": True}},
+                session=session
+            )
+            db["activities"].insert_one(activity.copy(), session=session)
+            
+        execute_transactional(db, do_update_ticket)
+        
+        log_user_visit(int(user["id"]), str(ticket["project_id"]))
+        notify_activity(db, project_id=int(ticket["project_id"]), message=activity["message"], actor_email=user["email"], ticket_id=int(ticket_id))
+    else:
+        db["tickets"].update_one(
+            {"id": ticket_id},
+            {"$set": update_fields, "$currentDate": {"updated_at": True}},
+        )
+        log_user_visit(int(user["id"]), str(ticket["project_id"]))
     
     ticket = db["tickets"].find_one({"id": ticket_id}, {"_id": 0})
     return ticket

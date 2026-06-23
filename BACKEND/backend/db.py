@@ -49,18 +49,34 @@ def get_database():
     return get_db()
 
 
-def get_next_sequence(db, name: str) -> int:
+def get_next_sequence(db, name: str, session=None) -> int:
     doc = db["counters"].find_one_and_update(
         {"_id": name},
         {"$inc": {"seq": 1}},
         upsert=True,
         return_document=ReturnDocument.AFTER,
+        session=session,
     )
     
     return int((doc or {}).get("seq", 1))
 
 
+def execute_transactional(db, callback):
+    client = db.client
+    try:
+        with client.start_session() as session:
+            with session.start_transaction():
+                return callback(session)
+    except Exception as e:
+        from pymongo.errors import OperationFailure
+        if isinstance(e, OperationFailure) and ("transaction numbers are only allowed" in str(e).lower() or "not a replica set" in str(e).lower()):
+            print("⚠️ MongoDB transaction unsupported (not a replica set). Running non-transactionally.")
+            return callback(None)
+        raise e
+
+
 def utc_now() -> datetime:
     #return a timezone-aware UTC datetime for BSON Date storage in mongodb
     return datetime.now(timezone.utc)
+
 

@@ -22,14 +22,6 @@ async def send_html_email(recipients: List[str], subject: str, body: str):
         raise
 
 
-async def send_otp_email(email: str, code: str):
-    subject = "Your Ticket Dashboard OTP"
-    body = (
-        f"<p>Your OTP code is: <strong>{code}</strong></p>"
-        "<p>This code will expire in 5 minutes.</p>"
-    )
-    await send_html_email([email], subject, body)
-
 
 async def send_activity_email(recipients: List[str], subject: str, body: str):
     await send_html_email(recipients, subject, body)

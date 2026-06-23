@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import type { User, OTPRequest, OTPVerify } from '../types';
+import type { User, GoogleLoginRequest } from '../types';
 
 const API_BASE = import.meta.env.VITE_API_URL;
 const getAuthHeaders = () => {
@@ -11,23 +11,13 @@ const getAuthHeaders = () => {
 };
 
 const authAPI = {
-  requestOTP: async (data: OTPRequest) => {
-    const response = await fetch(`${API_BASE}/auth/request-otp`, {
+  googleLogin: async (data: GoogleLoginRequest) => {
+    const response = await fetch(`${API_BASE}/auth/google-login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data)
     });
-    if (!response.ok) throw new Error('Failed to send OTP');
-    return response.json();
-  },
-
-  verifyOTP: async (data: OTPVerify) => {
-    const response = await fetch(`${API_BASE}/auth/verify-otp`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data)
-    });
-    if (!response.ok) throw new Error('Invalid OTP');
+    if (!response.ok) throw new Error('Invalid Google token');
     return response.json();
   },
 
@@ -55,21 +45,18 @@ interface AuthContextType {
   isAuthenticated: boolean;
   isLoading: boolean;
   error: string | null;
-  requestOTP: (data: OTPRequest) => Promise<void>;
-  verifyOTP: (data: OTPVerify) => Promise<void>;
+  googleLogin: (idToken: string) => Promise<void>;
   logout: () => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  // Simple state hooks instead of complex reducer
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(localStorage.getItem('token'));
   const [isLoading, setIsLoading] = useState(!!token); // Only load if we have a token
   const [error, setError] = useState<string | null>(null);
   const isAuthenticated = !!user;
-
 
   useEffect(() => {
     const storedToken = localStorage.getItem('token');
@@ -77,41 +64,36 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setIsLoading(true);
       authAPI.getMe()
         .then(setUser)
-        .catch(() => setError('Failed to refresh session'))
+        .catch(() => {
+          // Clear token if verification fails to prevent redirection/authentication loops
+          localStorage.removeItem('token');
+          setToken(null);
+          setUser(null);
+          setError('Failed to refresh session');
+        })
         .finally(() => setIsLoading(false));
     }
   }, []);
 
-  const requestOTP = async (data: OTPRequest) => {
+  const googleLogin = async (idToken: string) => {
     setIsLoading(true);
     setError(null);
     try {
-      await authAPI.requestOTP(data);
-    } catch (error) {
-      setError('Failed to request OTP');
-      throw error;
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const verifyOTP = async (data: OTPVerify) => {
-    setIsLoading(true);
-    setError(null);
-    try {
-      const response = await authAPI.verifyOTP(data);
+      const response = await authAPI.googleLogin({ id_token: idToken });
       const newToken = response.token;
       
       localStorage.setItem('token', newToken);
       setToken(newToken);
-      setUser({ 
-        id: response.user_id, 
-        email: data.email, 
-        created_at: new Date().toISOString() 
-      });
-    } catch (error) {
-      setError('Invalid OTP');
-      throw error;
+      
+      // Fetch user info using the new token
+      const userDoc = await authAPI.getMe();
+      setUser(userDoc);
+    } catch (err) {
+      localStorage.removeItem('token');
+      setToken(null);
+      setUser(null);
+      setError('Google login failed');
+      throw err;
     } finally {
       setIsLoading(false);
     }
@@ -119,13 +101,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const logout = async () => {
     try {
-      // Call backend logout to clear super toggle state
       await authAPI.logout();
     } catch (error) {
-      // Continue with logout even if backend call fails
       console.warn('Backend logout failed:', error);
     } finally {
-      // Always clear frontend state
       localStorage.removeItem('token');
       setToken(null);
       setUser(null);
@@ -140,8 +119,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       isAuthenticated, 
       isLoading, 
       error, 
-      requestOTP, 
-      verifyOTP, 
+      googleLogin, 
       logout 
     }}>
       {children}
@@ -156,3 +134,4 @@ export function useAuth() {
   }
   return context;
 }
+

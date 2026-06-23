@@ -5,7 +5,7 @@ import { NotificationProvider } from './contexts/NotificationContext.tsx';
 import { SuperToggleProvider } from './contexts/SuperToggleContext.tsx';
 import ProtectedRoute from './components/ProtectedRoute.tsx';
 import LoginPage from './pages/LoginPage.tsx';
-import ProjectListPage from './pages/ProjectListPage.tsx';
+import HomePage from './pages/HomePage.tsx';
 import ProjectDetailPage from './pages/ProjectDetailPage.tsx';
 import Layout from './components/Layout.tsx';
 
@@ -18,16 +18,7 @@ function App() {
             <Router>
               <Routes>
                 <Route path="/login" element={<LoginPage />} />
-                <Route
-                  path="/"
-                  element={
-                    <ProtectedRoute>
-                      <Layout>
-                        <ProjectListPage />
-                      </Layout>
-                    </ProtectedRoute>
-                  }
-                />
+                <Route path="/" element={<HomePage />} />
                 <Route
                   path="/projects/:projectId"
                   element={

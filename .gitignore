@@ -1,21 +1,48 @@
+# Project custom ignores
 cmd.txt
 .notes.md
-__pycache__
-ticket_dashboard.db
-.env
 Software engineer hires 2025.pdf
-frontend/.env.production
-.venv
 video.mp4
+ticket_dashboard.db
+db_check.py
 docker-compose.yml
 
-docker-compose.yml
+# Environment files
+.env
+.env.*
+*.env
+!.env.example
+frontend/.env.production
 
+# Python environment & cache
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+ENV/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
+# Node / Vite frontend dependencies & builds
+node_modules/
+dist/
+dist-ssr/
+*.local
+.eslintcache
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
 
-
-
-
-
-
-
+# IDE / System configurations
+.vscode/
+.idea/
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp

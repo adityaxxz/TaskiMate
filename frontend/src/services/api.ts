@@ -38,16 +38,8 @@ const fetchAPI = async (url: string, options: RequestInit = {}) => {
 
 
 export const authAPI = {
-  requestOTP: async (data: { email: string }) => {
-    return fetchAPI('/auth/request-otp', {
-      method: 'POST',
-      body: JSON.stringify(data),
-      headers: getHeaders(false),
-    });
-  },
-
-  verifyOTP: async (data: { email: string; code: string }) => {
-    return fetchAPI('/auth/verify-otp', {
+  googleLogin: async (data: { id_token: string }) => {
+    return fetchAPI('/auth/google-login', {
       method: 'POST',
       body: JSON.stringify(data),
       headers: getHeaders(false),
